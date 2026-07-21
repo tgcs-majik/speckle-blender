@@ -27,6 +27,32 @@ from specklepy.logging import metrics
 from ... import bl_info
 
 
+class _ProgressServerTransport(ServerTransport):
+    """ServerTransport that reports upload progress to Blender's cursor and console.
+
+    ``save_object`` is called on the main thread during serialization, so
+    driving ``window_manager.progress_*`` from here is thread-safe. Any progress
+    error is swallowed so it can never break a publish.
+    """
+
+    def __init__(self, *args, wm=None, total=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._wm = wm
+        self._total = max(int(total), 1)
+        self._n = 0
+
+    def save_object(self, id: str, serialized_object: str) -> None:
+        super().save_object(id, serialized_object)
+        self._n += 1
+        if self._wm is not None:
+            try:
+                self._wm.progress_update(min(99, int(self._n / self._total * 100)))
+            except Exception:
+                pass
+        if self._n % 1000 == 0:
+            print(f"[Speckle] Uploading objects: {self._n}/{self._total}")
+
+
 def _check_use_model_ingestion_send(client, project_id: str, model_id: str) -> bool:
     """Check if the server supports model ingestion and the user is authorized."""
     try:
@@ -152,9 +178,11 @@ def publish_operation(
         # check ingestion support before sending data (fail fast on permission errors)
         use_ingestion = _check_use_model_ingestion_send(client, project_id, model_id)
 
-        transport = ServerTransport(stream_id=project_id, client=client)
-
         # build collection hierarchy and convert objects
+        print(
+            f"[Speckle] Publish: converting {len(objects_to_convert)} "
+            "selected object(s)..."
+        )
         root_collection = build_collection_hierarchy(
             context, objects_to_convert, apply_modifiers
         )
@@ -165,7 +193,20 @@ def publish_operation(
         # add material proxies
         add_render_material_proxies_to_base(root_collection, objects_to_convert)
 
-        obj_id = operations.send(root_collection, [transport])
+        # serialize + upload with progress reporting
+        total_objects = count_objects_in_collection(root_collection)
+        print(f"[Speckle] Serializing + uploading {total_objects} objects to server...")
+        transport = _ProgressServerTransport(
+            stream_id=project_id, client=client, wm=wm, total=total_objects
+        )
+        wm.progress_begin(0, 100)
+        try:
+            obj_id = operations.send(root_collection, [transport])
+        finally:
+            wm.progress_end()
+        print(
+            f"[Speckle] Upload complete ({total_objects} objects). Creating version..."
+        )
 
         if use_ingestion:
             version_id = _send_via_ingestion(
@@ -198,8 +239,7 @@ def publish_operation(
                 },
             )
 
-        # count total objects for success message
-        total_objects = count_objects_in_collection(root_collection)
+        print(f"[Speckle] ✓ Published version {version_id}")
 
         return (
             True,
@@ -392,16 +432,23 @@ def convert_selected_objects(
     units = get_scene_units(scene)
     scale_factor = scene.unit_settings.scale_length
 
+    wm = context.window_manager
+    total = len(objects_to_convert)
     speckle_objects = []
-    for obj in objects_to_convert:
-        if not obj or obj.type not in ["MESH", "CURVE", "EMPTY"]:
-            speckle_objects.append(None)
-            continue
-
-        speckle_obj = convert_to_speckle(
-            obj, scale_factor, units.value, apply_modifiers
-        )
-        speckle_objects.append(speckle_obj)
+    wm.progress_begin(0, total)
+    try:
+        for i, obj in enumerate(objects_to_convert):
+            if not obj or obj.type not in ["MESH", "CURVE", "EMPTY"]:
+                speckle_objects.append(None)
+            else:
+                speckle_objects.append(
+                    convert_to_speckle(obj, scale_factor, units.value, apply_modifiers)
+                )
+            wm.progress_update(i + 1)
+            if (i + 1) % 500 == 0 or (i + 1) == total:
+                print(f"[Speckle] Converting objects: {i + 1}/{total}")
+    finally:
+        wm.progress_end()
 
     return speckle_objects
 
