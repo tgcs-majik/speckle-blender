@@ -7,4 +7,19 @@ license = "Apache-2.0"
 dependencies = ["specklepy>=2026.6.0"]
 
 [dependency-groups]
-dev = ["fake-bpy-module-latest>=20260501", "ruff==0.14.14", "pre-commit>=4.0.1"]
+dev = [
+    "fake-bpy-module-latest>=20260501",
+    "ruff==0.14.14",
+    "pre-commit>=4.0.1",
+    "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: talks to a real Speckle server (needs SPECKLE_TOKEN/SPECKLE_PROJECT env)",
+]
+testpaths = ["tests/unit", "tests/integration"]
+
+[tool.uv]
+# This is a Blender extension, not an installable Python package.
+package = false

@@ -5,7 +5,6 @@ from typing import List, Optional, Dict, Tuple
 from specklepy.objects import Base
 from specklepy.objects.models.collections.collection import Collection
 from specklepy.core.api import operations
-from specklepy.transports.server import ServerTransport
 from specklepy.core.api.inputs.version_inputs import CreateVersionInput
 from specklepy.objects.models.units import Units
 from specklepy.logging.exceptions import GraphQLException, WorkspacePermissionException
@@ -25,32 +24,7 @@ from ...converter.utils import get_project_workspace_id
 from ..utils.account_manager import _client_cache
 from specklepy.logging import metrics
 from ... import bl_info
-
-
-class _ProgressServerTransport(ServerTransport):
-    """ServerTransport that reports upload progress to Blender's cursor and console.
-
-    ``save_object`` is called on the main thread during serialization, so
-    driving ``window_manager.progress_*`` from here is thread-safe. Any progress
-    error is swallowed so it can never break a publish.
-    """
-
-    def __init__(self, *args, wm=None, total=0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._wm = wm
-        self._total = max(int(total), 1)
-        self._n = 0
-
-    def save_object(self, id: str, serialized_object: str) -> None:
-        super().save_object(id, serialized_object)
-        self._n += 1
-        if self._wm is not None:
-            try:
-                self._wm.progress_update(min(99, int(self._n / self._total * 100)))
-            except Exception:
-                pass
-        if self._n % 1000 == 0:
-            print(f"[Speckle] Uploading objects: {self._n}/{self._total}")
+from .progress_transport import ProgressServerTransport
 
 
 def _check_use_model_ingestion_send(client, project_id: str, model_id: str) -> bool:
@@ -196,7 +170,7 @@ def publish_operation(
         # serialize + upload with progress reporting
         total_objects = count_objects_in_collection(root_collection)
         print(f"[Speckle] Serializing + uploading {total_objects} objects to server...")
-        transport = _ProgressServerTransport(
+        transport = ProgressServerTransport(
             stream_id=project_id, client=client, wm=wm, total=total_objects
         )
         wm.progress_begin(0, 100)
