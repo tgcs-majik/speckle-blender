@@ -23,7 +23,7 @@ ensure_dependencies(f"Blender {bpy.app.version[0]}.{bpy.app.version[1]}")
 bl_info = {
     "name": "Speckle Connector",
     "author": "Speckle",
-    "version": (3, 999, 999),
+    "version": (2026, 6, 0),
     "blender": (4, 2, 0),
     "location": "3d viewport toolbar (N), under the Speckle tab.",
     "description": "Publish models to and load models from other AEC apps.",

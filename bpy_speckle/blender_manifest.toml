@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
 id = "speckle_blender_addon"
-version = "3.0.0"
+version = "2026.6.0"
 name = "Speckle Connector"
 tagline = "Load models from other AEC apps into Blender with Speckle"
 maintainer = "Speckle"
