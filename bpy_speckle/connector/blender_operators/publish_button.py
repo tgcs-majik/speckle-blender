@@ -1,14 +1,14 @@
-import bpy
-from bpy.types import Context
-from bpy.types import Event
 from typing import Set
 
-from ..operations.publish_operation import publish_operation
-from ..utils.account_manager import get_server_url_by_account_id, can_create_version
+import bpy
+from bpy.types import Context, Event
+
+from ..utils.account_manager import can_create_version, get_server_url_by_account_id
 from ..utils.model_card_utils import model_card_exists, update_model_card_objects
+from ._modal_publish import ModalPublishMixin
 
 
-class SPECKLE_OT_publish(bpy.types.Operator):
+class SPECKLE_OT_publish(ModalPublishMixin, bpy.types.Operator):
     bl_idname = "speckle.publish"
     bl_label = "Publish to Speckle"
     bl_description = "Publish selected objects to Speckle"
@@ -31,7 +31,6 @@ class SPECKLE_OT_publish(bpy.types.Operator):
     def execute(self, context: Context) -> Set[str]:
         wm = context.window_manager
 
-        # check if we have stored objects from selection dialog
         if not wm.speckle_objects:
             self.report(
                 {"ERROR"},
@@ -46,11 +45,9 @@ class SPECKLE_OT_publish(bpy.types.Operator):
         if not account_id:
             self.report({"ERROR"}, "No account selected")
             return {"CANCELLED"}
-
         if not project_id:
             self.report({"ERROR"}, "No project selected")
             return {"CANCELLED"}
-
         if not model_id:
             self.report({"ERROR"}, "No model selected")
             return {"CANCELLED"}
@@ -74,40 +71,39 @@ class SPECKLE_OT_publish(bpy.types.Operator):
             self.report({"ERROR"}, "None of the selected objects could be found")
             return {"CANCELLED"}
 
-        success, message, version_id = publish_operation(
-            context, objects_to_convert, self.version_message, self.apply_modifiers
+        # Create (or reuse) the model card up-front so it can host the in-panel
+        # progress bar while the upload streams. Version id is set on completion.
+        state = context.scene.speckle_state
+        self._created_new_card = False
+        if model_card_exists(project_id, model_id, True, context):
+            model_card = state.get_model_card_by_id(
+                f"{wm.ui_mode}-{project_id}-{model_id}"
+            )
+        else:
+            model_card = state.model_cards.add()
+            self._created_new_card = True
+
+        model_card.account_id = account_id
+        model_card.server_url = get_server_url_by_account_id(account_id)
+        model_card.project_id = project_id
+        model_card.project_name = getattr(wm, "selected_project_name", "")
+        model_card.model_id = model_id
+        model_card.model_name = getattr(wm, "selected_model_name", "")
+        model_card.is_publish = True
+        model_card.load_option = "SPECIFIC"  # published versions are specific
+        model_card.apply_modifiers = self.apply_modifiers
+        update_model_card_objects(model_card, objects_to_convert)
+
+        return self._run_modal_publish(
+            context,
+            model_card,
+            objects_to_convert,
+            self.apply_modifiers,
+            self.version_message,
         )
 
-        if not success:
-            self.report({"ERROR"}, message)
-            return {"CANCELLED"}
-
-        # create model card if operation was successful
-        if hasattr(context.scene, "speckle_state") and hasattr(
-            context.scene.speckle_state, "model_cards"
-        ):
-            if model_card_exists(
-                wm.selected_project_id, wm.selected_model_id, True, context
-            ):
-                model_card = context.scene.speckle_state.get_model_card_by_id(
-                    f"{wm.ui_mode}-{wm.selected_project_id}-{wm.selected_model_id}"
-                )
-            else:
-                model_card = context.scene.speckle_state.model_cards.add()
-
-            model_card.account_id = account_id
-            model_card.server_url = get_server_url_by_account_id(account_id)
-            model_card.project_id = project_id
-            model_card.project_name = getattr(wm, "selected_project_name", "")
-            model_card.model_id = model_id
-            model_card.model_name = getattr(wm, "selected_model_name", "")
-            model_card.is_publish = True
-            model_card.load_option = "SPECIFIC"  # published versions are specific
-            model_card.version_id = version_id
-            model_card.apply_modifiers = self.apply_modifiers
-            update_model_card_objects(model_card, objects_to_convert)
-
-        # clear selected model details from Window Manager
+    def _clear_wm(self, context: Context) -> None:
+        wm = context.window_manager
         wm.selected_account_id = ""
         wm.selected_project_id = ""
         wm.selected_project_name = ""
@@ -117,6 +113,19 @@ class SPECKLE_OT_publish(bpy.types.Operator):
         wm.selected_version_id = ""
         wm.speckle_objects.clear()
 
-        self.report({"INFO"}, message)
-        context.area.tag_redraw()
-        return {"FINISHED"}
+    def _on_publish_failed(self, context: Context, model_card) -> None:
+        # roll back a card we created just for this (failed) publish
+        if not getattr(self, "_created_new_card", False) or model_card.version_id:
+            return
+        cards = context.scene.speckle_state.model_cards
+        try:
+            target = model_card.get_model_card_id()
+        except Exception:  # noqa: BLE001
+            return
+        for i, card in enumerate(cards):
+            try:
+                if card.get_model_card_id() == target:
+                    cards.remove(i)
+                    return
+            except Exception:  # noqa: BLE001
+                continue

@@ -92,10 +92,10 @@ class SPECKLE_PT_model_cards_panel(bpy.types.Panel):
                     "speckle.model_card_settings", text="", icon="COLLAPSEMENU"
                 ).model_card_id = model_card.get_model_card_id()
 
-                # in-panel upload progress bar while publishing
+                # live upload status while publishing (the exact total is
+                # unknowable up-front, so we show a running object count)
                 if model_card.is_publishing:
-                    box.progress(
-                        factor=model_card.publish_progress,
-                        type="BAR",
+                    box.label(
                         text=model_card.publish_status or "Publishing...",
+                        icon="SORTTIME",
                     )

@@ -115,6 +115,67 @@ def _phase_worker(model_id, cubes):
     return version_id
 
 
+def _phase_threaded(model_id, cubes):
+    """Prove the upload runs on a *background* thread while the main thread reads
+    progress concurrently — exactly what the modal operator does. Deterministic:
+    asserts the worker ran on a different thread id than the caller (not timing)."""
+    import threading
+    import time
+    from importlib import import_module
+
+    import bpy  # noqa: F401
+
+    po = import_module(f"{_ADDON}.connector.operations.publish_operation")
+    pt = import_module(f"{_ADDON}.connector.operations.progress_transport")
+    am = import_module(f"{_ADDON}.connector.utils.account_manager")
+
+    root = po.build_collection_hierarchy(bpy.context, cubes, True)
+    po.add_render_material_proxies_to_base(root, cubes)
+    total = po.count_objects_in_collection(root)
+    client = am._client_cache.get_client(ACCOUNT_ID)
+    transport = pt.ProgressServerTransport(
+        stream_id=PROJECT, client=client, wm=None, total=total
+    )
+    source_data = po._build_source_data()
+
+    main_tid = threading.get_ident()
+    result = {}
+
+    def worker():
+        result["tid"] = threading.get_ident()
+        try:
+            result["vid"] = po.send_and_create_version(
+                client, root, PROJECT, model_id, "e2e threaded", transport, source_data
+            )
+        except Exception as e:  # noqa: BLE001
+            result["err"] = str(e)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    # main thread keeps running (as the modal timer would) while the upload works
+    samples = 0
+    while thread.is_alive():
+        _ = transport.progress_count
+        samples += 1
+        time.sleep(0.005)
+    thread.join()
+
+    if result.get("err"):
+        _fail(f"threaded worker error: {result['err']}")
+    if not result.get("vid"):
+        _fail("threaded worker returned no version id")
+    if result.get("tid") == main_tid:
+        _fail("upload did NOT run on a background thread")
+    if transport.progress_count <= 0:
+        _fail("transport observed no objects during the threaded upload")
+    print(
+        f"[e2e] phase 3 (threaded) ok, version {result['vid']}, "
+        f"upload ran on background thread {result['tid']} != main {main_tid}, "
+        f"main thread polled {samples}x concurrently"
+    )
+    return result["vid"]
+
+
 def main():
     import bpy
 
@@ -134,17 +195,18 @@ def main():
 
         v1 = _phase_publish_operation(model_id, cubes)
         v2 = _phase_worker(model_id, cubes)
+        v3 = _phase_threaded(model_id, cubes)
 
         versions = _version_count(model_id)
-        if versions["totalCount"] != 2:
-            _fail(f"expected 2 versions on server, got {versions['totalCount']}")
+        if versions["totalCount"] != 3:
+            _fail(f"expected 3 versions on server, got {versions['totalCount']}")
         ids = {v["id"] for v in versions["items"]}
-        if {v1, v2} - ids:
+        if {v1, v2, v3} - ids:
             _fail("a returned version id is missing from the server")
         if any(v["sourceApplication"] != "blender" for v in versions["items"]):
             _fail("a version has the wrong sourceApplication")
 
-        print(f"E2E_PASS versions={v1},{v2}")
+        print(f"E2E_PASS versions={v1},{v2},{v3}")
     finally:
         gql(
             "mutation($i:DeleteModelInput!){modelMutations{delete(input:$i)}}",

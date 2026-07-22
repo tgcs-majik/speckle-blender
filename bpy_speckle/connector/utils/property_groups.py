@@ -108,13 +108,6 @@ class speckle_model_card(bpy.types.PropertyGroup):
         description="True while a publish is in progress",
         default=False,
     )  # type: ignore
-    publish_progress: bpy.props.FloatProperty(
-        name="Publish Progress",
-        description="Upload progress from 0 to 1",
-        default=0.0,
-        min=0.0,
-        max=1.0,
-    )  # type: ignore
     publish_status: bpy.props.StringProperty(
         name="Publish Status",
         description="Human-readable publish status line",
