@@ -43,6 +43,10 @@ class SPECKLE_PT_model_cards_panel(bpy.types.Panel):
                 row_1: UILayout = box.row()
                 row_2: UILayout = box.row()
 
+                # lock the card's buttons while a publish is streaming
+                row_1.enabled = not model_card.is_publishing
+                row_2.enabled = not model_card.is_publishing
+
                 if model_card.is_publish:
                     # Publish button in the model card
                     row_1.operator(
@@ -87,3 +91,11 @@ class SPECKLE_PT_model_cards_panel(bpy.types.Panel):
                 row_1.operator(
                     "speckle.model_card_settings", text="", icon="COLLAPSEMENU"
                 ).model_card_id = model_card.get_model_card_id()
+
+                # in-panel upload progress bar while publishing
+                if model_card.is_publishing:
+                    box.progress(
+                        factor=model_card.publish_progress,
+                        type="BAR",
+                        text=model_card.publish_status or "Publishing...",
+                    )

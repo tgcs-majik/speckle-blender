@@ -67,9 +67,15 @@ def _send_via_ingestion(
     model_id: str,
     obj_id: str,
     version_message: str,
+    source_data: Optional[SourceDataInput] = None,
 ) -> str:
-    """Send via the model ingestion. Returns version_id."""
-    source_data = _build_source_data()
+    """Send via the model ingestion. Returns version_id.
+
+    ``source_data`` may be pre-built on the main thread and passed in (it reads
+    ``bpy.data``); if omitted it is built here (main-thread callers only).
+    """
+    if source_data is None:
+        source_data = _build_source_data()
 
     create_input = ModelIngestionCreateInput(
         project_id=project_id,
@@ -127,6 +133,33 @@ def _send_via_version_create(
     )
     version = client.version.create(version_input)
     return version.id
+
+
+def send_and_create_version(
+    client,
+    root_collection,
+    project_id: str,
+    model_id: str,
+    version_message: str,
+    transport,
+    source_data: Optional[SourceDataInput] = None,
+) -> str:
+    """Serialize + upload ``root_collection`` through ``transport`` and create a
+    version. Returns the new version id.
+
+    Contains NO ``bpy`` access, so it is safe to run in a background thread.
+    ``source_data`` (which reads ``bpy.data``) must be pre-built on the main
+    thread when the ingestion path is used off-thread.
+    """
+    use_ingestion = _check_use_model_ingestion_send(client, project_id, model_id)
+    obj_id = operations.send(root_collection, [transport])
+    if use_ingestion:
+        return _send_via_ingestion(
+            client, project_id, model_id, obj_id, version_message, source_data
+        )
+    return _send_via_version_create(
+        client, project_id, model_id, obj_id, version_message
+    )
 
 
 def publish_operation(
